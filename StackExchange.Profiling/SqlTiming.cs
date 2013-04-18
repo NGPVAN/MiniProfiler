@@ -100,7 +100,7 @@ namespace StackExchange.Profiling
         {
             get
             {
-                if (MiniProfiler.Settings.SqlFormatter == null) 
+                if (MiniProfiler.Settings.SqlFormatter == null)
                     return CommandString;
 
                 return MiniProfiler.Settings.SqlFormatter.FormatSql(this);
@@ -227,6 +227,21 @@ namespace StackExchange.Profiling
         }
 
         /// <summary>
+        /// Returns the DbType as string, accounting for table parameter types
+        /// </summary>
+        /// <param name="parameter"></param>
+        /// <returns></returns>
+        private static string GetDbType(IDataParameter parameter)
+        {
+            if (parameter is System.Data.SqlClient.SqlParameter && ((System.Data.SqlClient.SqlParameter)parameter).SqlDbType == SqlDbType.Structured)
+            {
+                return ((System.Data.SqlClient.SqlParameter)parameter).TypeName;
+            }
+
+            return parameter.DbType.ToString();
+        }
+
+        /// <summary>
         /// Returns the value of <paramref name="parameter"/> suitable for storage/display.
         /// </summary>
         /// <param name="parameter">The DB Parameter.
@@ -235,6 +250,24 @@ namespace StackExchange.Profiling
         private static string GetValue(IDataParameter parameter)
         {
             object rawValue = parameter.Value;
+
+            if (rawValue is DataTable)
+            {
+                var rows = new List<List<string>>();
+                foreach (DataRow row in ((DataTable)rawValue).Select())
+                {
+                    var colValues = new List<string>();
+                    foreach (DataColumn col in row.Table.Columns)
+                    {
+                        colValues.Add((row[col] == DBNull.Value || row[col] == null) ? "NULL" : row[col].ToString());
+                    }
+                    rows.Add(colValues);
+                }
+
+                return rows.ToJson();
+
+            }
+
             if (rawValue == null || rawValue == DBNull.Value)
             {
                 return null;
@@ -328,7 +361,7 @@ namespace StackExchange.Profiling
                         ParentSqlTimingId = Id,
                         Name = parameter.ParameterName.Trim(),
                         Value = GetValue(parameter),
-                        DbType = parameter.DbType.ToString(),
+                        DbType = GetDbType(parameter),
                         Size = GetParameterSize(parameter)
                     });
                 }

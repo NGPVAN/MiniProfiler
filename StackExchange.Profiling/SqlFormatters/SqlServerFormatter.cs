@@ -6,6 +6,8 @@ namespace StackExchange.Profiling.SqlFormatters
     using System.Globalization;
     using System.Linq;
     using System.Text;
+    using System.Runtime.Serialization.Json;
+    using System.IO;
 
     /// <summary>
     /// Formats SQL server queries with a DECLARE up top for parameter values
@@ -31,20 +33,20 @@ namespace StackExchange.Profiling.SqlFormatters
         {
             var capture = native;
             return p =>
+            {
+                if (p.Size < 1)
                 {
-                    if (p.Size < 1)
-                    {
-                        return capture;
-                    }
-                    return capture + "(" + (p.Size > 8000 ? "max" : p.Size.ToString(CultureInfo.InvariantCulture)) + ")";
-                };
+                    return capture;
+                }
+                return capture + "(" + (p.Size > 8000 ? "max" : p.Size.ToString(CultureInfo.InvariantCulture)) + ")";
+            };
         }
 
         /// <summary>
         /// Initialises static members of the <see cref="SqlServerFormatter"/> class.
         /// </summary>
         static SqlServerFormatter()
-        {   
+        {
             ParamTranslator = new Dictionary<DbType, Func<SqlTimingParameter, string>>
             {
                 { DbType.AnsiString, GetWithLenFormatter("varchar") },
@@ -75,19 +77,12 @@ namespace StackExchange.Profiling.SqlFormatters
                 return timing.CommandString;
             }
 
-            var buffer = new StringBuilder("DECLARE ");
-            var first = true;
+            var buffer = new StringBuilder();
 
             foreach (var p in timing.Parameters)
             {
-                if (first)
-                {
-                    first = false;
-                }
-                else
-                {
-                    buffer.AppendLine(",").Append(new string(' ', 8));
-                }
+
+                string paramFormat = "DECLARE {0} {1} = {2};";
 
                 DbType parsed;
                 string resolvedType = null;
@@ -95,15 +90,27 @@ namespace StackExchange.Profiling.SqlFormatters
                 {
                     resolvedType = p.DbType;
                 }
-                
+
+                string val = p.Value;
+
                 if (resolvedType == null)
                 {
-                    Func<SqlTimingParameter, string> translator; 
+                    Func<SqlTimingParameter, string> translator;
                     if (ParamTranslator.TryGetValue(parsed, out translator))
                     {
                         resolvedType = translator(p);
                     }
                     resolvedType = resolvedType ?? p.DbType;
+                    val = PrepareValue(p);
+                }
+                else
+                {
+                    paramFormat = "DECLARE {0} {1};";
+                    val = GetJsonVal(p);
+                    if (val != null && val.Length > 0)
+                    {
+                        paramFormat += "\nINSERT INTO {0} VALUES {2};";
+                    }
                 }
 
                 var niceName = p.Name;
@@ -112,11 +119,12 @@ namespace StackExchange.Profiling.SqlFormatters
                     niceName = "@" + niceName;
                 }
 
-                buffer.Append(niceName).Append(" ").Append(resolvedType).Append(" = ").Append(PrepareValue(p));
+
+                buffer.AppendFormat(paramFormat, niceName, resolvedType, val);
+                buffer.AppendLine();
             }
 
             return buffer
-                .Append(";")
                 .AppendLine()
                 .AppendLine()
                 .Append(timing.CommandString)
@@ -130,6 +138,7 @@ namespace StackExchange.Profiling.SqlFormatters
         /// <returns>the prepared parameter value.</returns>
         private string PrepareValue(SqlTimingParameter parameter)
         {
+
             if (parameter.Value == null)
             {
                 return "null";
@@ -153,5 +162,47 @@ namespace StackExchange.Profiling.SqlFormatters
 
             return prefix + "'" + parameter.Value.Replace("'", "''") + "'";
         }
+
+        private string GetJsonVal(SqlTimingParameter p)
+        {
+            if (p.Value == null || p.Value.Length == 0)
+            {
+                return null;
+            }
+
+            DataContractJsonSerializer ser = new DataContractJsonSerializer(typeof(List<List<string>>));
+
+
+            using (Stream s = GenerateStreamFromString(p.Value))
+            {
+                var data = (List<List<String>>)ser.ReadObject(s);
+
+                var rows = new List<string>();
+
+                foreach (List<string> row in data)
+                {
+                    for (int i = 0; i < row.Count; i++)
+                    {
+                        row[i] = "'" + row[i].Replace("'", "''") + "'";
+                    }
+                    rows.Add("(" + string.Join(",", row) + ")");
+                }
+
+                return string.Join(",\n", rows);
+
+            }
+
+        }
+
+        private Stream GenerateStreamFromString(string s)
+        {
+            MemoryStream stream = new MemoryStream();
+            StreamWriter writer = new StreamWriter(stream);
+            writer.Write(s);
+            writer.Flush();
+            stream.Position = 0;
+            return stream;
+        }
+
     }
 }
