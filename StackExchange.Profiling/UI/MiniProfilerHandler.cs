@@ -9,13 +9,14 @@
     using System.Text;
     using System.Web;
     using System.Web.Routing;
+    using System.Web.SessionState;
 
     using StackExchange.Profiling.Helpers;
 
     /// <summary>
     /// Understands how to route and respond to MiniProfiler UI URLS.
     /// </summary>
-    public class MiniProfilerHandler : IRouteHandler, IHttpHandler
+    public class MiniProfilerHandler : IRouteHandler, IHttpHandler, IRequiresSessionState
     {
         /// <summary>
         /// Embedded resource contents keyed by filename.
